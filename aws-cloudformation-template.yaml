@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Apex VetLIS - Production AWS Cloud Architecture (App Runner / ECS, RDS PostgreSQL, S3, CloudWatch)'
+
+Parameters:
+  ServiceName:
+    Type: String
+    Default: 'apex-vetlis'
+    Description: 'Name of the VetLIS Service'
+  DatabasePassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 41
+    Default: 'VetLISSecure2026!'
+    Description: 'Master password for RDS PostgreSQL database'
+
+Resources:
+  # 1. S3 Storage for Reports & Authenticity QR Stamps
+  VetLISReportBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub '${ServiceName}-reports-${AWS::AccountId}-${AWS::Region}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+
+  # 2. VPC & Networking for Isolated Clinic Operations
+  VetLISVPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: 'ApexVetLIS-VPC'
+
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: 'ApexVetLIS-IGW'
+
+  AttachGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref VetLISVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VetLISVPC
+      CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'ApexVetLIS-Public-A'
+
+  PublicSubnetB:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VetLISVPC
+      CidrBlock: '10.0.2.0/24'
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'ApexVetLIS-Public-B'
+
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VetLISVPC
+      Tags:
+        - Key: Name
+          Value: 'ApexVetLIS-Public-RouteTable'
+
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref InternetGateway
+
+  SubnetARouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  SubnetBRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  # 3. Security Groups
+  AppSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Allow HTTP/HTTPS and Socket traffic for Apex VetLIS'
+      VpcId: !Ref VetLISVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: tcp
+          FromPort: 5100
+          ToPort: 5100
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: tcp
+          FromPort: 5101
+          ToPort: 5101
+          CidrIp: '0.0.0.0/0'
+
+  # 4. Amazon ECR Container Repository
+  VetLISECRRepository:
+    Type: 'AWS::ECR::Repository'
+    Properties:
+      RepositoryName: !Ref ServiceName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+Outputs:
+  ECRRepositoryUri:
+    Description: 'ECR Container Repository URI'
+    Value: !GetAtt VetLISECRRepository.RepositoryUri
+  S3BucketName:
+    Description: 'S3 Reports Storage Bucket'
+    Value: !Ref VetLISReportBucket
+  VpcId:
+    Description: 'VPC ID'
+    Value: !Ref VetLISVPC
