@@ -4,6 +4,7 @@ TCP Socket Listeners (ASTM Port 5100, HL7 Port 5101) & Real-Time WebSocket Manag
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Set, Optional
 from fastapi import WebSocket
@@ -11,11 +12,15 @@ from sqlalchemy.orm import Session
 
 from database import SessionLocal
 from models import Order, Sample, ResultItem, Patient, RawPacketLog, Analyzer
-from analyzer_engine.astm_parser import parse_astm_message, ENQ, ACK, NAK, EOT, STX, ETX
+from analyzer_engine.astm_parser import parse_astm_message, calculate_astm_checksum, ENQ, ACK, NAK, EOT, STX, ETX, ETB
 from analyzer_engine.hl7_parser import parse_hl7_message, generate_hl7_ack, wrap_mllp, unwrap_mllp
 from analyzer_engine.delta_checker import resolve_species_flag, compute_delta_check
 
 logger = logging.getLogger("ApexVetLIS.Engine")
+
+# Analyzer socket ports (override via ASTM_PORT / HL7_PORT environment variables)
+ASTM_PORT = int(os.getenv("ASTM_PORT", "5100"))
+HL7_PORT = int(os.getenv("HL7_PORT", "5101"))
 
 import random
 import uuid
@@ -305,12 +310,32 @@ def process_incoming_analyzer_data(raw_data: str, protocol: str, source_ip: str 
 
 
 # --- ASTM TCP Server (Port 5100) ---
+def decode_astm_frame(frame_data: bytes) -> Optional[tuple]:
+    """
+    Validates one ASTM E1381 frame (everything after <STX> up to and including <LF>).
+    Returns (frame_number, text) when the checksum matches, otherwise None.
+    Text keeps its trailing <CR> for ETX frames, so concatenating the text of
+    consecutive frames rebuilds records that were split across ETB frames.
+    """
+    end_idx = max(frame_data.rfind(ETX), frame_data.rfind(ETB))
+    if end_idx < 1 or len(frame_data) < end_idx + 3:
+        return None
+    body = frame_data[:end_idx + 1]
+    received_cs = frame_data[end_idx + 1:end_idx + 3].decode('latin1', errors='ignore').upper()
+    if calculate_astm_checksum(body) != received_cs:
+        return None
+    frame_number = body[:1].decode('latin1', errors='ignore')
+    text = body[1:-1].decode('latin1', errors='ignore')
+    return frame_number, text
+
+
 async def handle_astm_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     peer_addr = writer.get_extra_info('peername')
     ip_str = peer_addr[0] if peer_addr else "127.0.0.1"
     logger.info(f"ASTM client connected from {ip_str}")
 
-    buffer = []
+    buffer: List[str] = []
+    last_frame_number = None
     try:
         while True:
             char = await reader.read(1)
@@ -322,14 +347,22 @@ async def handle_astm_client(reader: asyncio.StreamReader, writer: asyncio.Strea
                 writer.write(ACK)
                 await writer.drain()
                 buffer = []
+                last_frame_number = None
 
             elif char == STX:
-                # Read until LF (End of Frame)
+                # Read until LF (End of Frame), then verify the modulo-256 checksum
                 frame_data = await reader.readuntil(b'\n')
-                full_frame = STX + frame_data
-                decoded_str = full_frame.decode('latin1', errors='ignore')
-                buffer.append(decoded_str)
-                # Send ACK for frame receipt
+                decoded = decode_astm_frame(frame_data)
+                if decoded is None:
+                    logger.warning(f"ASTM frame checksum mismatch from {ip_str} -> Sending NAK")
+                    writer.write(NAK)
+                    await writer.drain()
+                    continue
+                frame_number, text = decoded
+                # A repeated frame number means the sender missed our ACK and retransmitted
+                if frame_number != last_frame_number:
+                    buffer.append(text)
+                    last_frame_number = frame_number
                 writer.write(ACK)
                 await writer.drain()
 
@@ -341,6 +374,7 @@ async def handle_astm_client(reader: asyncio.StreamReader, writer: asyncio.Strea
                     raw_msg = "".join(buffer)
                     process_incoming_analyzer_data(raw_msg, protocol="ASTM", source_ip=ip_str)
                     buffer = []
+                last_frame_number = None
 
     except asyncio.IncompleteReadError:
         pass
@@ -348,34 +382,51 @@ async def handle_astm_client(reader: asyncio.StreamReader, writer: asyncio.Strea
         logger.error(f"ASTM socket error from {ip_str}: {e}")
     finally:
         if buffer:
+            logger.warning(f"ASTM connection from {ip_str} closed before EOT; ingesting {len(buffer)} received frame(s).")
             raw_msg = "".join(buffer)
             process_incoming_analyzer_data(raw_msg, protocol="ASTM", source_ip=ip_str)
         writer.close()
-        await writer.wait_closed()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
         logger.info(f"ASTM client disconnected from {ip_str}")
 
 
 # --- HL7 TCP Server (Port 5101) ---
+MLLP_START = b'\x0b'
+MLLP_END = b'\x1c\x0d'
+
 async def handle_hl7_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     peer_addr = writer.get_extra_info('peername')
     ip_str = peer_addr[0] if peer_addr else "127.0.0.1"
     logger.info(f"HL7 client connected from {ip_str}")
 
+    pending = b""
     try:
         while True:
-            # Read until MLLP End: <FS><CR>
             data = await reader.read(4096)
             if not data:
                 break
+            pending += data
 
-            raw_str = unwrap_mllp(data)
-            if "MSH" in raw_str:
+            # A message may span several reads, and one read may carry several messages
+            while MLLP_END in pending:
+                frame, pending = pending.split(MLLP_END, 1)
+                start = frame.find(MLLP_START)
+                if start >= 0:
+                    frame = frame[start + 1:]
+                raw_str = unwrap_mllp(frame)
+                if "MSH" not in raw_str:
+                    continue
+
                 parsed = parse_hl7_message(raw_str)
-                # Process ingestion
-                process_incoming_analyzer_data(raw_str, protocol="HL7", source_ip=ip_str)
-                
-                # Send HL7 ACK wrapped in MLLP
-                ack_response = generate_hl7_ack(parsed)
+                res = process_incoming_analyzer_data(raw_str, protocol="HL7", source_ip=ip_str)
+
+                if res.get("status") == "ERROR":
+                    ack_response = generate_hl7_ack(parsed, ack_code="AE", text_msg="Message could not be processed")
+                else:
+                    ack_response = generate_hl7_ack(parsed)
                 writer.write(wrap_mllp(ack_response))
                 await writer.drain()
 
@@ -383,11 +434,14 @@ async def handle_hl7_client(reader: asyncio.StreamReader, writer: asyncio.Stream
         logger.error(f"HL7 socket error from {ip_str}: {e}")
     finally:
         writer.close()
-        await writer.wait_closed()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
         logger.info(f"HL7 client disconnected from {ip_str}")
 
 
-async def start_tcp_servers(host: str = "0.0.0.0", astm_port: int = 5100, hl7_port: int = 5101):
+async def start_tcp_servers(host: str = "0.0.0.0", astm_port: int = ASTM_PORT, hl7_port: int = HL7_PORT):
     """Starts both ASTM and HL7 background TCP listeners."""
     astm_server = await asyncio.start_server(handle_astm_client, host, astm_port)
     hl7_server = await asyncio.start_server(handle_hl7_client, host, hl7_port)

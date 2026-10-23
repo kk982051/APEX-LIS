@@ -339,3 +339,47 @@ def test_system_diagnostics_and_reseed():
 
 if __name__ == "__main__":
     pytest.main(["-v", "backend/test_lis_suite.py"])
+
+
+# ==========================================
+# REGRESSION TESTS
+# ==========================================
+def test_login_requires_pin():
+    # Missing or empty PIN must never authenticate
+    assert client.post("/api/auth/login", json={"role": "VET"}).status_code == 422
+    assert client.post("/api/auth/login", json={"role": "VET", "pin_code": ""}).status_code == 401
+    ok = client.post("/api/auth/login", json={"role": "VET", "pin_code": "1234"}).json()
+    assert ok["token"] != f"token_{ok['user']['username']}_VET"
+
+
+def test_astm_frame_checksum_validation():
+    from analyzer_engine.tcp_listener import decode_astm_frame
+    frame = build_astm_frame(1, "H|\\^&|||GFE QuickCell Vet")
+    assert decode_astm_frame(frame[1:]) == ("1", "H|\\^&|||GFE QuickCell Vet\r")
+
+    corrupted = bytearray(frame[1:])
+    corrupted[5] ^= 0x01
+    assert decode_astm_frame(bytes(corrupted)) is None
+
+
+def test_accession_numbers_not_reused_after_delete():
+    payload = {"patient": {"name": "Seq Test", "species": "FELINE", "owner_name": "QA"}, "panel_types": ["CBC"], "priority": "ROUTINE"}
+    first = client.post("/api/orders", json=payload).json()
+    second = client.post("/api/orders", json=payload).json()
+    assert client.delete(f"/api/orders/{first['id']}").status_code == 200
+    third = client.post("/api/orders", json=payload)
+    assert third.status_code == 200
+    assert third.json()["accession_no"] not in (second["accession_no"],)
+
+
+def test_editing_verified_result_requires_reverification():
+    orders = client.get("/api/orders").json()
+    order = next(o for o in orders if client.get(f"/api/results/order/{o['id']}").json())
+    client.post(f"/api/results/verify/{order['id']}", json={"verified_by": "QA Vet", "verification_notes": "ok"})
+    item = client.get(f"/api/results/order/{order['id']}").json()[0]
+
+    resp = client.put(f"/api/results/item/{item['id']}", json={"result_value": 999.0, "override_reason": "QA"})
+    assert resp.status_code == 200
+    refreshed = client.get(f"/api/orders/{order['id']}").json()
+    assert refreshed["status"] == "INGESTED"
+    assert refreshed["verified_by"] is None

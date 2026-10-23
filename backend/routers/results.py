@@ -40,6 +40,8 @@ def update_result_item(item_id: int, payload: ResultItemUpdate, db: Session = De
         item.flag = spec_info["flag"]
         item.ref_low = spec_info["ref_low"]
         item.ref_high = spec_info["ref_high"]
+        item.critical_low = spec_info["critical_low"]
+        item.critical_high = spec_info["critical_high"]
 
         # Re-compute delta
         pval, pdate, dpct, dflag = compute_delta_check(db, order.patient_id, order.id, item.test_code, payload.result_value)
@@ -52,6 +54,13 @@ def update_result_item(item_id: int, payload: ResultItemUpdate, db: Session = De
         item.result_str = payload.result_str
         item.is_manual_override = True
         item.override_reason = payload.override_reason
+
+    # A released report must not silently change: editing a result sends the order back for sign-off
+    if order and order.status == "VERIFIED" and (payload.result_value is not None or payload.result_str is not None):
+        order.status = "INGESTED"
+        order.verified_by = None
+        order.verified_at = None
+        order.verification_notes = None
 
     db.commit()
     db.refresh(item)

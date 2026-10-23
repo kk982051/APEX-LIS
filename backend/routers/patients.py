@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from database import get_db
 from models import Patient
 from schemas import PatientCreate, PatientOut
+from routers.orders import next_sequence_id
 
 router = APIRouter(prefix="/patients", tags=["Patients"])
 
@@ -34,7 +35,7 @@ def get_patients(
 def create_patient(patient_in: PatientCreate, db: Session = Depends(get_db)):
     mrn = patient_in.mrn
     if not mrn:
-        mrn = f"PAT-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{db.query(Patient).count() + 1:03d}"
+        mrn = next_sequence_id(db, Patient.mrn, f"PAT-{datetime.now(timezone.utc).strftime('%Y%m%d')}-")
     
     # Check MRN uniqueness
     existing = db.query(Patient).filter(Patient.mrn == mrn).first()

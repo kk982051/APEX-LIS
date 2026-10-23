@@ -43,11 +43,13 @@ def resolve_species_flag(
         TestReferenceRange.species == species
     ).first()
 
-    # Fallback to ALL or CANINE if specific species not configured
-    if not ref_range:
+    # Fallback to ALL, then CANINE, if specific species not configured
+    for fallback_species in ("ALL", "CANINE"):
+        if ref_range:
+            break
         ref_range = db.query(TestReferenceRange).filter(
             TestReferenceRange.test_master_id == tm.id,
-            TestReferenceRange.species.in_(["ALL", "CANINE"])
+            TestReferenceRange.species == fallback_species
         ).first()
 
     if not ref_range:
@@ -74,9 +76,9 @@ def resolve_species_flag(
             flag = "CRITICAL_LOW"
         elif chigh is not None and value >= chigh:
             flag = "CRITICAL_HIGH"
-        elif value < low:
+        elif low is not None and value < low:
             flag = "LOW"
-        elif value > high:
+        elif high is not None and value > high:
             flag = "HIGH"
 
     return {
@@ -166,8 +168,8 @@ def evaluate_westgard_rules(
 
     # Check against recent historical runs
     if recent_runs:
-        prev_z = recent_runs[0].z_score
-        
+        prev_z = recent_runs[0].z_score if recent_runs[0].z_score is not None else 0.0
+
         # 2_2s check (both > +2SD or both < -2SD)
         if (z_current >= 2.0 and prev_z >= 2.0) or (z_current <= -2.0 and prev_z <= -2.0):
             return "REJECT", "2_2s", z_rounded
@@ -178,14 +180,14 @@ def evaluate_westgard_rules(
 
     # 4_1s check (last 3 + current = 4 runs)
     if len(recent_runs) >= 3:
-        last_3_z = [r.z_score for r in recent_runs[:3]]
+        last_3_z = [r.z_score or 0.0 for r in recent_runs[:3]]
         all_4_z = [z_current] + last_3_z
         if all(z >= 1.0 for z in all_4_z) or all(z <= -1.0 for z in all_4_z):
             return "REJECT", "4_1s", z_rounded
 
     # 10_x check (last 9 + current = 10 runs)
     if len(recent_runs) >= 9:
-        last_9_z = [r.z_score for r in recent_runs[:9]]
+        last_9_z = [r.z_score or 0.0 for r in recent_runs[:9]]
         all_10_z = [z_current] + last_9_z
         if all(z > 0 for z in all_10_z) or all(z < 0 for z in all_10_z):
             return "REJECT", "10_x", z_rounded

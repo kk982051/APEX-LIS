@@ -44,8 +44,12 @@ def get_report_summary(order_id: int, db: Session = Depends(get_db)):
     lab_accreditation = settings.accreditation if settings else "American Association of Veterinary Laboratory Diagnosticians (AAVLD)"
 
     # Generate cryptographic hash for report authenticity
+    result_fingerprint = "|".join(
+        f"{r.test_code}={r.result_value if r.result_value is not None else (r.result_str or '')}:{r.flag}"
+        for r in results
+    )
     verification_hash = hashlib.sha256(
-        f"{order.accession_no}_{patient.mrn}_{order.verified_at or ''}_{len(results)}".encode()
+        f"{order.accession_no}_{patient.mrn}_{order.verified_at or ''}_{order.verified_by or ''}_{result_fingerprint}".encode()
     ).hexdigest()[:16].upper()
 
     # Verification URL / Payload for QR Code

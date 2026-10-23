@@ -4,7 +4,7 @@ import axios from 'axios';
 
 export default function LoginModal({ isOpen, onLoginSuccess }) {
   const [selectedRole, setSelectedRole] = useState('VET');
-  const [pinCode, setPinCode] = useState('1234');
+  const [pinCode, setPinCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -58,7 +58,8 @@ export default function LoginModal({ isOpen, onLoginSuccess }) {
 
   const handleQuickRoleSelect = (roleId) => {
     setSelectedRole(roleId);
-    setPinCode('1234');
+    setPinCode('');
+    setErrorMsg('');
   };
 
   return (
@@ -111,7 +112,7 @@ export default function LoginModal({ isOpen, onLoginSuccess }) {
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1 flex items-center justify-between">
               <span>Security PIN Code</span>
-              <span className="text-[10px] text-slate-500 font-mono">Default PIN: 1234</span>
+              <span className="text-[10px] text-slate-500 font-mono">New install PIN: 1234 (change in Settings)</span>
             </label>
             <div className="relative">
               <Key className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
@@ -134,8 +135,8 @@ export default function LoginModal({ isOpen, onLoginSuccess }) {
 
           <button
             type="submit"
-            disabled={loading}
-            className="w-full py-3 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 shadow-lg shadow-emerald-500/20 transition flex items-center justify-center gap-2"
+            disabled={loading || !pinCode}
+            className="w-full py-3 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 shadow-lg shadow-emerald-500/20 transition flex items-center justify-center gap-2"
           >
             <span>{loading ? 'Authenticating...' : `Log In as ${selectedRole}`}</span>
             <ArrowRight className="h-4 w-4" />

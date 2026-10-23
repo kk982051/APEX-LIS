@@ -12,6 +12,7 @@ from models import Order, Patient, ResultItem, RawPacketLog, ClinicSettings, Tes
 from analyzer_engine.astm_parser import parse_astm_message, calculate_astm_checksum
 from analyzer_engine.hl7_parser import parse_hl7_message
 from analyzer_engine.delta_checker import resolve_species_flag, evaluate_westgard_rules
+from analyzer_engine.tcp_listener import ASTM_PORT, HL7_PORT
 
 router = APIRouter(prefix="/system", tags=["System Diagnostics"])
 
@@ -108,7 +109,7 @@ def run_system_diagnostics(db: Session = Depends(get_db)):
             "details": str(e)
         })
 
-    for port, label in [(5100, "ASTM Socket"), (5101, "HL7 Socket")]:
+    for port, label in [(ASTM_PORT, "ASTM Socket"), (HL7_PORT, "HL7 Socket")]:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(0.5)

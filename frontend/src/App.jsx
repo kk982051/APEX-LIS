@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios, { getWebSocketUrl } from './api';
 import Navbar from './components/Navbar';
 import Dashboard from './components/Dashboard';
@@ -26,14 +26,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const saved = localStorage.getItem('apex_user');
-      return saved ? JSON.parse(saved) : {
-        id: 2,
-        username: 'dr_taylor',
-        full_name: 'Dr. Alex Taylor, DVM, DACVP',
-        role: 'VET',
-        title: 'Board-Certified Veterinary Pathologist',
-        email: 'dr.taylor@apexvet.com'
-      };
+      return saved ? JSON.parse(saved) : null;
     } catch {
       return null;
     }
@@ -81,8 +74,10 @@ export default function App() {
   // Live Toast Notifications
   const [toasts, setToasts] = useState([]);
 
+  const toastIdRef = useRef(0);
   const addToast = (title, message, type = 'info') => {
-    const id = Date.now();
+    toastIdRef.current += 1;
+    const id = `${Date.now()}-${toastIdRef.current}`;
     setToasts(prev => [...prev, { id, title, message, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
@@ -93,13 +88,13 @@ export default function App() {
     try {
       const res = await axios.get('/api/orders');
       setOrders(res.data);
-      if (res.data.length > 0 && !selectedOrderId) {
-        setSelectedOrderId(res.data[0].id);
+      if (res.data.length > 0) {
+        setSelectedOrderId(prev => prev ?? res.data[0].id);
       }
     } catch (err) {
       console.error('Error fetching orders:', err);
     }
-  }, [selectedOrderId]);
+  }, []);
 
   const fetchRawLogs = useCallback(async () => {
     try {
@@ -130,8 +125,10 @@ export default function App() {
   useEffect(() => {
     let ws = null;
     let reconnectTimeout = null;
+    let disposed = false;
 
     const connectWebSocket = () => {
+      if (disposed) return;
       try {
         const wsUrl = getWebSocketUrl();
         ws = new WebSocket(wsUrl);
@@ -173,7 +170,7 @@ export default function App() {
 
         ws.onclose = () => {
           setWsConnected(false);
-          reconnectTimeout = setTimeout(connectWebSocket, 3000);
+          if (!disposed) reconnectTimeout = setTimeout(connectWebSocket, 3000);
         };
 
         ws.onerror = () => {
@@ -182,13 +179,14 @@ export default function App() {
       } catch (err) {
         console.error('WebSocket connection error:', err);
         setWsConnected(false);
-        reconnectTimeout = setTimeout(connectWebSocket, 5000);
+        if (!disposed) reconnectTimeout = setTimeout(connectWebSocket, 5000);
       }
     };
 
     connectWebSocket();
 
     return () => {
+      disposed = true;
       if (ws) ws.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };

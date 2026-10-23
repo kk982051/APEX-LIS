@@ -1,3 +1,5 @@
+import hmac
+import secrets
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -8,10 +10,12 @@ from models import User
 
 router = APIRouter(prefix="/auth", tags=["Authentication & Users"])
 
+VALID_ROLES = {"ADMIN", "VET", "LAB"}
+
 class LoginRequest(BaseModel):
     username: Optional[str] = None
     role: Optional[str] = None
-    pin_code: str = "1234"
+    pin_code: str
 
 class UserUpdate(BaseModel):
     full_name: str
@@ -58,7 +62,8 @@ def login_user(payload: LoginRequest, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=404, detail="User not found for given credentials")
 
-    if payload.pin_code and user.pin_code and payload.pin_code != user.pin_code:
+    # Always require the PIN; an empty or missing PIN must never grant access
+    if not user.pin_code or not hmac.compare_digest(payload.pin_code.encode(), user.pin_code.encode()):
         raise HTTPException(status_code=401, detail="Invalid PIN code")
 
     return {
@@ -71,7 +76,7 @@ def login_user(payload: LoginRequest, db: Session = Depends(get_db)):
             "title": user.title,
             "email": user.email
         },
-        "token": f"token_{user.username}_{user.role}"
+        "token": secrets.token_urlsafe(32)
     }
 
 @router.put("/users/{user_id}")
@@ -88,7 +93,10 @@ def update_user(user_id: int, payload: UserUpdate, db: Session = Depends(get_db)
     if payload.pin_code is not None and payload.pin_code.strip():
         user.pin_code = payload.pin_code
     if payload.role is not None:
-        user.role = payload.role.upper()
+        role = payload.role.upper()
+        if role not in VALID_ROLES:
+            raise HTTPException(status_code=400, detail=f"Role must be one of {', '.join(sorted(VALID_ROLES))}")
+        user.role = role
 
     db.commit()
     db.refresh(user)

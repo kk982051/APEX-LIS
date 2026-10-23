@@ -14,7 +14,7 @@ from analyzer_engine.simulator import (
     send_astm_tcp_simulated,
     send_hl7_tcp_simulated
 )
-from analyzer_engine.tcp_listener import process_incoming_analyzer_data
+from analyzer_engine.tcp_listener import process_incoming_analyzer_data, ASTM_PORT, HL7_PORT
 
 router = APIRouter(prefix="/analyzers", tags=["Analyzers"])
 
@@ -53,8 +53,8 @@ def get_network_status():
     primary_ip = ips[0] if ips else "127.0.0.1"
 
     # Check local ports
-    astm_open = check_port_open("127.0.0.1", 5100)
-    hl7_open = check_port_open("127.0.0.1", 5101)
+    astm_open = check_port_open("127.0.0.1", ASTM_PORT)
+    hl7_open = check_port_open("127.0.0.1", HL7_PORT)
     api_open = check_port_open("127.0.0.1", 8000)
 
     return {
@@ -62,16 +62,16 @@ def get_network_status():
         "primary_lan_ip": primary_ip,
         "all_ips": ips,
         "ports": {
-            "astm_5100": {"port": 5100, "protocol": "ASTM E1394 (Hematology)", "active": astm_open},
-            "hl7_5101": {"port": 5101, "protocol": "HL7 v2.x (Biochemistry)", "active": hl7_open},
+            "astm_5100": {"port": ASTM_PORT, "protocol": "ASTM E1394 (Hematology)", "active": astm_open},
+            "hl7_5101": {"port": HL7_PORT, "protocol": "HL7 v2.x (Biochemistry)", "active": hl7_open},
             "api_8000": {"port": 8000, "protocol": "FastAPI Core REST & WS", "active": api_open},
             "frontend_3000": {"port": 3000, "protocol": "React Vite Web Workstation", "active": True}
         },
         "connection_urls": {
             "workstation_lan": f"http://{primary_ip}:3000",
             "api_lan": f"http://{primary_ip}:8000/docs",
-            "astm_target": f"{primary_ip}:5100",
-            "hl7_target": f"{primary_ip}:5101"
+            "astm_target": f"{primary_ip}:{ASTM_PORT}",
+            "hl7_target": f"{primary_ip}:{HL7_PORT}"
         }
     }
 
@@ -127,7 +127,7 @@ async def simulate_astm_run(
     )
 
     if use_tcp:
-        res = await send_astm_tcp_simulated(host="127.0.0.1", port=5100, payload_str=payload_str)
+        res = await send_astm_tcp_simulated(host="127.0.0.1", port=ASTM_PORT, payload_str=payload_str)
     else:
         res = process_incoming_analyzer_data(payload_str, protocol="ASTM", source_ip="127.0.0.1 (Direct Sim)")
 
@@ -188,7 +188,7 @@ async def simulate_astm_3part_run(
     )
 
     if use_tcp:
-        res = await send_astm_tcp_simulated(host="127.0.0.1", port=5100, payload_str=payload_str)
+        res = await send_astm_tcp_simulated(host="127.0.0.1", port=ASTM_PORT, payload_str=payload_str)
     else:
         res = process_incoming_analyzer_data(payload_str, protocol="ASTM", source_ip="127.0.0.1 (Direct 3-Part Sim)")
 
@@ -255,7 +255,7 @@ async def simulate_hl7_run(
     )
 
     if use_tcp:
-        res = await send_hl7_tcp_simulated(host="127.0.0.1", port=5101, payload_str=payload_str)
+        res = await send_hl7_tcp_simulated(host="127.0.0.1", port=HL7_PORT, payload_str=payload_str)
     else:
         res = process_incoming_analyzer_data(payload_str, protocol="HL7", source_ip="127.0.0.1 (Direct Sim)")
 

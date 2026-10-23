@@ -13,6 +13,18 @@ router = APIRouter(prefix="/orders", tags=["Orders"])
 def utc_now():
     return datetime.now(timezone.utc)
 
+def next_sequence_id(db: Session, column, prefix: str) -> str:
+    """
+    Returns the next "<prefix>NNN" identifier. Uses the highest existing sequence
+    number rather than a row count, so deleting a record never causes a reused ID.
+    """
+    highest = 0
+    for (value,) in db.query(column).filter(column.like(f"{prefix}%")).all():
+        suffix = value[len(prefix):]
+        if suffix.isdigit():
+            highest = max(highest, int(suffix))
+    return f"{prefix}{highest + 1:03d}"
+
 @router.get("", response_model=List[OrderOut])
 def get_orders(
     status: Optional[str] = None,
@@ -51,7 +63,9 @@ def create_order(payload: OrderCreate, db: Session = Depends(get_db)):
             raise HTTPException(status_code=404, detail="Patient ID not found")
     elif payload.patient:
         # Create patient inline
-        mrn = payload.patient.mrn or f"PAT-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{db.query(Patient).count() + 1:03d}"
+        mrn = payload.patient.mrn or next_sequence_id(db, Patient.mrn, f"PAT-{datetime.now(timezone.utc).strftime('%Y%m%d')}-")
+        if db.query(Patient).filter(Patient.mrn == mrn).first():
+            raise HTTPException(status_code=400, detail=f"Patient with MRN '{mrn}' already exists.")
         patient = Patient(
             mrn=mrn,
             name=payload.patient.name,
@@ -72,8 +86,7 @@ def create_order(payload: OrderCreate, db: Session = Depends(get_db)):
 
     # Generate unique accession number
     today_str = datetime.now(timezone.utc).strftime("%Y%m%d")
-    count_today = db.query(Order).filter(Order.accession_no.like(f"ORD-{today_str}%")).count()
-    accession_no = f"ORD-{today_str}-{count_today + 1:03d}"
+    accession_no = next_sequence_id(db, Order.accession_no, f"ORD-{today_str}-")
 
     panels_str = ", ".join(payload.panel_types) if payload.panel_types else "CBC"
     draw_dt = payload.draw_date or utc_now()

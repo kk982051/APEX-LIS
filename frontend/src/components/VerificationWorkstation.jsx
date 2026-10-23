@@ -43,15 +43,11 @@ export default function VerificationWorkstation({
   const [editingItemId, setEditingItemId] = useState(null);
   const [editValue, setEditValue] = useState('');
   const [overrideReason, setOverrideReason] = useState('');
-  const [pathologistName, setPathologistName] = useState(currentUser?.full_name || 'Dr. Alex Taylor, DVM, DACVP');
+  // The signature always belongs to the logged-in user; lab technicians cannot release reports
+  const pathologistName = currentUser?.full_name || '';
+  const canSign = Boolean(currentUser) && currentUser.role !== 'LAB';
   const [verificationNotes, setVerificationNotes] = useState('');
   const [verifying, setVerifying] = useState(false);
-
-  React.useEffect(() => {
-    if (currentUser?.full_name) {
-      setPathologistName(currentUser.full_name);
-    }
-  }, [currentUser]);
 
   if (!currentOrder) {
     return (
@@ -481,8 +477,9 @@ export default function VerificationWorkstation({
                   <input
                     type="text"
                     value={pathologistName}
-                    onChange={(e) => setPathologistName(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-emerald-500 font-semibold"
+                    readOnly
+                    title="Signed as the logged-in user"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-300 focus:outline-none font-semibold cursor-not-allowed"
                   />
                 </div>
 
@@ -503,15 +500,17 @@ export default function VerificationWorkstation({
                       <span className="text-emerald-400 font-bold flex items-center gap-1">
                         <Check className="h-3.5 w-3.5" /> Verified by {currentOrder.verified_by}
                       </span>
-                    ) : (
+                    ) : canSign ? (
                       <span>Pending electronic sign-off</span>
+                    ) : (
+                      <span className="text-amber-400">Only a veterinarian or administrator can sign off</span>
                     )}
                   </div>
 
                   <button
                     onClick={handleVerify}
-                    disabled={verifying}
-                    className="px-6 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 shadow-lg shadow-emerald-500/20 transition flex items-center gap-2"
+                    disabled={verifying || !canSign}
+                    className="px-6 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 shadow-lg shadow-emerald-500/20 transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <UserCheck className="h-4 w-4" />
                     <span>{verifying ? 'Signing...' : 'Sign & Verify Order'}</span>

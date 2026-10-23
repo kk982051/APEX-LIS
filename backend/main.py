@@ -1,12 +1,15 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from database import engine, Base, SessionLocal
 from seeds.default_tests import seed_database
-from analyzer_engine.tcp_listener import ws_manager, start_tcp_servers
+from analyzer_engine.tcp_listener import ws_manager, start_tcp_servers, ASTM_PORT, HL7_PORT
 from routers import patients, orders, tests, results, analyzers, qc, reports, auth, settings, system
 
 logging.basicConfig(
@@ -32,9 +35,9 @@ async def lifespan(app: FastAPI):
     astm_server = None
     hl7_server = None
     try:
-        astm_server, hl7_server = await start_tcp_servers(host="0.0.0.0", astm_port=5100, hl7_port=5101)
+        astm_server, hl7_server = await start_tcp_servers(host="0.0.0.0", astm_port=ASTM_PORT, hl7_port=HL7_PORT)
     except Exception as e:
-        logger.warning(f"Could not bind TCP sockets on ports 5100/5101 (might be in test environment): {e}")
+        logger.warning(f"Could not bind TCP sockets on ports {ASTM_PORT}/{HL7_PORT} (might be in test environment): {e}")
 
     yield
 
@@ -83,9 +86,9 @@ def health_check():
         "service": "Apex VetLIS Core Engine",
         "version": "2.0.0",
         "ports": {
-            "astm": 5100,
-            "hl7": 5101,
-            "api": 8000
+            "astm": ASTM_PORT,
+            "hl7": HL7_PORT,
+            "api": int(os.getenv("PORT", "8000"))
         }
     }
 
@@ -108,3 +111,20 @@ async def websocket_live_endpoint(websocket: WebSocket):
         ws_manager.disconnect(websocket)
     except Exception:
         ws_manager.disconnect(websocket)
+
+
+# Serve the built React workstation (copied to ./static by the Dockerfile) from the same origin
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+if os.path.isdir(STATIC_DIR):
+    assets_dir = os.path.join(STATIC_DIR, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_spa(full_path: str):
+        if full_path.startswith(("api/", "ws/")):
+            raise HTTPException(status_code=404, detail="Not Found")
+        candidate = os.path.realpath(os.path.join(STATIC_DIR, full_path))
+        if full_path and candidate.startswith(os.path.realpath(STATIC_DIR) + os.sep) and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))

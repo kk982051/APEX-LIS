@@ -17,10 +17,14 @@ export const getWebSocketUrl = () => {
   if (import.meta.env.VITE_WS_URL) {
     return import.meta.env.VITE_WS_URL;
   }
+  const apiBase = getApiBaseUrl();
+  if (apiBase) {
+    // Separately hosted API (e.g. Netlify frontend): derive the socket from VITE_API_URL
+    return `${apiBase.replace(/^http/, 'ws').replace(/\/+$/, '')}/ws/live`;
+  }
+  // Same origin: the Vite dev proxy (port 3000) or the backend serving the built app (Docker / Cloud Run)
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const host = window.location.hostname || 'localhost';
-  const port = '8000';
-  return `${protocol}//${host}:${port}/ws/live`;
+  return `${protocol}//${window.location.host}/ws/live`;
 };
 
 export default axios;
